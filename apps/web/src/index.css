@@ -1,209 +1,196 @@
-@import "tailwindcss";
-@import "@vidstack/react/player/styles/default/theme.css";
-@import "@vidstack/react/player/styles/default/layouts/audio.css";
-@import "@vidstack/react/player/styles/default/layouts/video.css";
-@import "./styles/theme.css";
-@import "./styles/shorts-overrides.css";
-@import "./styles/player-menu-overrides.css";
-@import "./styles/audio-only-player.css";
-@import "./styles/audio-only-controls.css";
-@import "./styles/adaptive-audio-layout.css";
-@import "./styles/audio-only-player-mobile.css";
-@import "./styles/player-mode-transition.css";
-@import "./styles/player-volume-controls.css";
-@import "./styles/sabr-seek-state.css";
-@import "./styles/video-player-mobile.css";
-@import "./styles/watch-mobile-landscape.css";
-@import "./styles/player-hotkeys.css";
-@import "./styles/autoplay-overlay.css";
-@import "./styles/pixel-scene-enter.css";
-@import "./styles/pixel-scene-loop.css";
-@import "./styles/pixel-intro.css";
-@import "./styles/pixel-dog.css";
+import { createRootRoute, Outlet, useRouterState } from "@tanstack/react-router";
+import { useEffect, useLayoutEffect, useRef } from "react";
+import { AppFooter } from "../components/app-footer";
+import { AuthBackdrop } from "../components/auth-backdrop";
+import { GuestDisabledScreen } from "../components/guest-disabled-screen";
+import { MobileTabBar } from "../components/mobile-tab-bar";
+import { Navbar } from "../components/navbar";
+import { Sidebar } from "../components/sidebar";
+import { useAuth } from "../hooks/use-auth";
+import { useInstance } from "../hooks/use-instance";
+import { useMobile } from "../hooks/use-mobile";
+import { useRegisterStatus } from "../hooks/use-register-status";
+import { useSessionActivityReporting } from "../hooks/use-session-activity-reporting";
+import { useTvNavigation } from "../hooks/use-tv-navigation";
+import { isAdminRoute, isAuthPage, requiresAuth } from "../lib/auth-routes";
+import { bootstrapSession } from "../lib/auth-session";
+import { isEmbeddedFrame } from "../lib/embed-access";
+import { applyTheme } from "../lib/theme";
+import { useAuthStore } from "../stores/auth-store";
+import { useThemeStore } from "../stores/theme-store";
+import { useUiStore } from "../stores/ui-store";
+import { useWatchLayoutStore } from "../stores/watch-layout-store";
 
-@keyframes card-pop-in {
-  from {
-    opacity: 0;
-    transform: scale(0.94) translateY(10px);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1) translateY(0);
-  }
+function AuthShell() {
+  return (
+    <AuthBackdrop contentClassName="flex min-h-screen items-center justify-center px-4 py-8">
+      <Outlet />
+    </AuthBackdrop>
+  );
 }
 
-@theme {
-  --animate-card-pop-in: card-pop-in 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+function RootLayout() {
+  const isMobile = useMobile();
+  const collapsed = useUiStore((s) => s.sidebarCollapsed);
+  const setSidebarCollapsed = useUiStore((s) => s.setSidebarCollapsed);
+  const closeMobileSidebar = useUiStore((s) => s.closeMobileSidebar);
+  const theme = useThemeStore((s) => s.theme);
+  const cinemaMode = useWatchLayoutStore((s) => s.cinemaMode);
+  const { isAuthed, isAdmin, isGuest, status } = useAuth();
+  const setSignedOut = useAuthStore((s) => s.setSignedOut);
+  const { data: instance } = useInstance();
+  const location = useRouterState({ select: (state) => state.location });
+  const pathname = location.pathname;
+  const pathWithSearch = `${pathname}${location.searchStr}`;
+  const hideEverythingPage = pathname === "/hide-everything";
+  const shortsPage = pathname === "/shorts";
+  const embedPage = pathname.startsWith("/embed/");
+  const framedEmbedPage = embedPage && isEmbeddedFrame();
+  const registerStatus = useRegisterStatus(status !== "loading" && !framedEmbedPage);
+  const watchPage = pathname === "/watch";
+  const watchCinemaPage = pathname === "/watch" && cinemaMode;
+  const wasWatchCinemaPage = useRef(watchCinemaPage);
+  useSessionActivityReporting(!framedEmbedPage);
+  useTvNavigation();
+
+  useEffect(() => {
+    if (framedEmbedPage) return;
+    void bootstrapSession();
+  }, [framedEmbedPage]);
+
+  useEffect(() => {
+    applyTheme(theme);
+  }, [theme]);
+
+  useEffect(() => {
+    const loader = document.getElementById("app-loader");
+    if (!loader) return;
+    loader.remove();
+  }, []);
+
+  useEffect(() => {
+    if (!isMobile) closeMobileSidebar();
+  }, [isMobile, closeMobileSidebar]);
+
+  useLayoutEffect(() => {
+    if (watchCinemaPage && !wasWatchCinemaPage.current && !isMobile) {
+      setSidebarCollapsed(true);
+    }
+    wasWatchCinemaPage.current = watchCinemaPage;
+  }, [watchCinemaPage, isMobile, setSidebarCollapsed]);
+
+  useEffect(() => {
+    if (status === "loading") return;
+    if (registerStatus.data?.bootstrapAvailable) {
+      setSignedOut();
+      if (pathname !== "/register") {
+        const redirect = isAuthPage(pathname)
+          ? ""
+          : `?redirect=${encodeURIComponent(pathWithSearch)}`;
+        window.location.replace(`/register${redirect}`);
+      }
+      return;
+    }
+    if (!isAuthed && isAdminRoute(pathname)) {
+      const redirect = encodeURIComponent(pathWithSearch);
+      window.location.replace(`/login?redirect=${redirect}`);
+      return;
+    }
+    if (!isAuthed && requiresAuth(pathname)) {
+      const redirect = encodeURIComponent(pathWithSearch);
+      window.location.replace(`/login?redirect=${redirect}`);
+      return;
+    }
+    if (isAdminRoute(pathname) && !isAdmin) {
+      window.location.replace("/");
+      return;
+    }
+  }, [
+    isAuthed,
+    isAdmin,
+    registerStatus.data?.bootstrapAvailable,
+    status,
+    pathname,
+    pathWithSearch,
+    setSignedOut,
+  ]);
+
+  if (status === "loading" && (requiresAuth(pathname) || isAdminRoute(pathname))) {
+    return (
+      <div className="min-h-screen bg-app text-fg flex items-center justify-center">
+        <p className="text-sm text-fg-muted">Loading session...</p>
+      </div>
+    );
+  }
+
+  const authPage = isAuthPage(pathname);
+
+  if (instance?.guestAllowed === false && (!isAuthed || isGuest) && !authPage && !embedPage) {
+    return <GuestDisabledScreen />;
+  }
+
+  if (authPage) {
+    return <AuthShell />;
+  }
+
+  if (hideEverythingPage) {
+    return (
+      <div className="min-h-screen bg-[#050806] text-white">
+        <Outlet />
+      </div>
+    );
+  }
+
+  if (shortsPage) {
+    return (
+      <div className="min-h-screen bg-app text-fg">
+        <Navbar />
+        <Sidebar />
+        <main style={{ paddingTop: "calc(3.5rem + env(safe-area-inset-top, 0px))" }}>
+          <Outlet />
+        </main>
+      </div>
+    );
+  }
+
+  if (embedPage) {
+    return (
+      <div className="fixed inset-0 bg-black">
+        <Outlet />
+      </div>
+    );
+  }
+
+  const topPadding = watchPage
+    ? undefined
+    : { paddingTop: "calc(3.5rem + env(safe-area-inset-top, 0px))" };
+  const showTabBar = isMobile && !shortsPage && !watchCinemaPage && !embedPage;
+  const mainBottomPad = showTabBar
+    ? "pb-[calc(env(safe-area-inset-bottom)+4.5rem)]"
+    : "pb-5 sm:pb-6";
+  const mainClasses = watchCinemaPage
+    ? "watch-page-main transition-all duration-200 ml-0"
+    : `watch-page-main px-3 sm:px-4 ${mainBottomPad} transition-all duration-200 ${
+        isMobile ? "ml-0" : collapsed ? "ml-14" : "ml-48"
+      }`;
+
+  return (
+    <div className={`min-h-screen bg-app text-fg ${watchPage ? "watch-page-shell" : ""}`}>
+      <div className="watch-page-chrome">
+        <Navbar />
+      </div>
+      {watchCinemaPage ? !isMobile && <Sidebar overlay /> : <Sidebar />}
+      <main className={mainClasses} style={topPadding}>
+        <Outlet />
+        <AppFooter />
+      </main>
+      {showTabBar && (
+        <div className="watch-page-chrome">
+          <MobileTabBar />
+        </div>
+      )}
+    </div>
+  );
 }
 
-html,
-body,
-#root {
-  min-height: 100%;
-  background: var(--color-zinc-950);
-}
-
-html,
-body {
-  overscroll-behavior-y: none;
-}
-
-@keyframes danmaku-scroll {
-  from {
-    transform: translateX(var(--d-from));
-  }
-  to {
-    transform: translateX(var(--d-to));
-  }
-}
-
-@keyframes page-fade-in {
-  from {
-    opacity: 0;
-    transform: translateY(6px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-@keyframes player-source-enter {
-  from {
-    opacity: 0.72;
-    transform: scale(1.006);
-    filter: blur(5px);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1);
-    filter: blur(0);
-  }
-}
-
-.typetype-player-surface {
-  animation: player-source-enter 340ms cubic-bezier(0.22, 1, 0.36, 1);
-}
-
-@keyframes toast-fade-in {
-  from {
-    opacity: 0;
-    transform: translateY(8px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-@keyframes dropdown-fade-in {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
-}
-
-@keyframes admin-panel-slide-in {
-  from {
-    opacity: 0;
-    transform: translateX(22px) scale(0.98);
-  }
-  to {
-    opacity: 1;
-    transform: translateX(0) scale(1);
-  }
-}
-
-@keyframes admin-actions-pop {
-  from {
-    opacity: 0;
-    transform: translateY(-4px) scale(0.97);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-}
-
-@keyframes onboarding-step-enter {
-  from {
-    opacity: 0;
-    transform: translateX(16px) scale(0.985);
-  }
-  to {
-    opacity: 1;
-    transform: translateX(0) scale(1);
-  }
-}
-
-@keyframes download-pop-in {
-  from {
-    opacity: 0;
-    transform: translateY(6px) scale(0.98);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-}
-
-@keyframes download-pop-out {
-  from {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-  to {
-    opacity: 0;
-    transform: translateY(10px) scale(0.975);
-  }
-}
-
-@keyframes download-item-pop {
-  from {
-    opacity: 0;
-    transform: translateY(5px) scale(0.99);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-}
-
-* {
-  scrollbar-width: thin;
-  scrollbar-color: var(--color-zinc-600) var(--color-zinc-950);
-}
-
-*::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
-
-*::-webkit-scrollbar-track {
-  background: var(--color-zinc-950);
-}
-
-*::-webkit-scrollbar-thumb {
-  background: var(--color-zinc-600);
-  border-radius: 3px;
-}
-
-*::-webkit-scrollbar-thumb:hover {
-  background: var(--color-zinc-500);
-}
-
-*::-webkit-scrollbar-corner {
-  background: var(--color-zinc-950);
-}
-
-.vds-playback-menu .vds-menu-section:has(.vds-quality-slider) {
-  display: none;
-}
-
-@media (max-width: 639px) {
-  .vds-video-layout .typetype-track-button {
-    display: none;
-  }
-}
+export const Route = createRootRoute({ component: RootLayout });
